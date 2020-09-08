@@ -26,37 +26,75 @@
 
 # COMMAND ----------
 
+import random
 from time import sleep
 from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from pyspark.sql.functions import *
 
-spark = (
-    SparkSession
-        .builder
-        .getOrCreate()
+# COMMAND ----------
+
+random_udf = udf(lambda: int(random.random() * 100000), IntegerType()).asNondeterministic()
+
+feature_cols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10", "SPEED", "TORQUE"]
+csv_schema = StructType([StructField(fcol, DoubleType()) for fcol in feature_cols])
+
+raw_csv_sdf = (
+  spark.read
+  .csv("/mnt/databricks-datasets-private/ML/wind_turbine", schema=csv_schema)
+  .withColumn("key", random_udf())
+  .withColumn("ID", monotonically_increasing_id())
+  .withColumn("TIMESTAMP", current_timestamp())
+  .withColumn("value", to_json(struct(*feature_cols, "ID", "TIMESTAMP")))
+  .withColumn("STATUS", substring(reverse(split(input_file_name(), "/"))[0], 1, 1))
+  .withColumn("STATUS", when(col("STATUS") == "D", "damaged").otherwise("healthy"))
+)
+
+# COMMAND ----------
+
+(
+  raw_csv_sdf
+  .select("ID", "STATUS")
+  .write
+  .format("delta")
+  .save("/Users/stuart.lynn@databricks.com/demo/turbine/status")
+)
+
+# COMMAND ----------
+
+(
+  raw_csv_sdf
+  .select("key", "value")
+  .repartition(5000) # small files!
+  .write
+  .mode("overwrite")
+  .csv("/Users/stuart.lynn@databricks.com/demo/turbine/raw/")
 )
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1/ Bronze layer: ingest data from Kafka
+# MAGIC ## 1/ Bronze layer: ingest data from streaming source (could be Kafka, Kinesis, Event Hubs)
 
 # COMMAND ----------
 
-# Load stream from Kafka
 bronzeDF = (
     spark.readStream
-        .format("kafka")
-        .option("kafka.bootstrap.servers", "kafkaserver1:9092,kafkaserver2:9092")
-        .option("subscribe", "turbine")
-        .load()
+#         .format("kafka")
+#         .option("kafka.bootstrap.servers", "kafkaserver1:9092,kafkaserver2:9092")
+#         .option("subscribe", "turbine")
+        .option("maxFilesPerTrigger", 1)
+        .schema("key string, value string")
+        .csv("/Users/stuart.lynn@databricks.com/demo/turbine/raw/")
 )
+
+bronzeDF.display()
+
+# COMMAND ----------
 
 # Write the output to a delta table
 (
     bronzeDF
-        .selectExpr("CAST(key AS STRING) as key", "CAST(value AS STRING) as value")
         .writeStream
         .format("delta")
         .option("checkpointLocation", "/Users/stuart.lynn@databricks.com/demo/turbine/bronze/_checkpoint")
@@ -67,22 +105,22 @@ bronzeDF = (
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Select data
-# MAGIC select count(*) from quentin.turbine_bronze;
-
-# COMMAND ----------
-
-# MAGIC %sql
 # MAGIC -- Add the table in our data catalog
-# MAGIC create table if not exists quentin.turbine_bronze
+# MAGIC create table if not exists stuart.turbine_bronze
 # MAGIC   using delta
 # MAGIC   location '/Users/stuart.lynn@databricks.com/demo/turbine/bronze/data';
 # MAGIC 
 # MAGIC -- Turn on autocompaction to solve small files issues on your streaming job, that's all you have to do!
-# MAGIC alter table quentin.turbine_bronze set tblproperties ('delta.autoOptimize.autoCompact' = true, 'delta.autoOptimize.optimizeWrite' = true);
+# MAGIC alter table stuart.turbine_bronze set tblproperties ('delta.autoOptimize.autoCompact' = true, 'delta.autoOptimize.optimizeWrite' = true);
 # MAGIC 
 # MAGIC -- Select data
-# MAGIC select * from quentin.turbine_bronze;
+# MAGIC select * from stuart.turbine_bronze;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC -- Select data
+# MAGIC select count(*) from stuart.turbine_bronze;
 
 # COMMAND ----------
 
@@ -95,7 +133,7 @@ jsonSchema = StructType([StructField(col, DoubleType(), False) for col in
                          ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10", "SPEED", "TORQUE", "ID"]] + [
                             StructField("TIMESTAMP", TimestampType())])
 
-silverStream = spark.readStream.table('quentin.turbine_bronze')
+silverStream = spark.readStream.table('stuart.turbine_bronze')
 (
     silverStream
         .withColumn("jsonData", from_json(col("value"), jsonSchema))
@@ -112,12 +150,12 @@ silverStream = spark.readStream.table('quentin.turbine_bronze')
 
 # MAGIC %sql
 # MAGIC -- Add the table in our data catalog
-# MAGIC create table if not exists quentin.turbine_silver
+# MAGIC create table if not exists stuart.turbine_silver
 # MAGIC   using delta
 # MAGIC   location '/Users/stuart.lynn@databricks.com/demo/turbine/silver/data';
 # MAGIC 
 # MAGIC -- Select data
-# MAGIC select * from quentin.turbine_silver;
+# MAGIC select * from stuart.turbine_silver;
 
 # COMMAND ----------
 
@@ -135,7 +173,7 @@ silverStream = spark.readStream.table('quentin.turbine_bronze')
 
 # COMMAND ----------
 
-turbine_stream = spark.readStream.table('quentin.turbine_silver')
+turbine_stream = spark.readStream.table('stuart.turbine_silver')
 turbine_status = spark.read.format("delta").load("/Users/stuart.lynn@databricks.com/demo/turbine/status")
 
 (
@@ -153,23 +191,23 @@ turbine_status = spark.read.format("delta").load("/Users/stuart.lynn@databricks.
 
 # MAGIC %sql
 # MAGIC -- Add the table in our data catalog
-# MAGIC create table if not exists quentin.turbine_gold
+# MAGIC create table if not exists stuart.turbine_gold
 # MAGIC   using delta
 # MAGIC   location '/Users/stuart.lynn@databricks.com/demo/turbine/gold/data';
 # MAGIC 
 # MAGIC -- Select data
-# MAGIC select * from quentin.turbine_gold;
+# MAGIC select * from stuart.turbine_gold;
 
 # COMMAND ----------
 
 # MAGIC %md 
 # MAGIC ## Run DELETE/UPDATE/MERGE with DELTA ! 
-# MAGIC We just realized that something is wrong in the data before 2020! Let's DELETE all this data from our gold table as we don't want to have wrong value in our dataset
+# MAGIC We just realized that something is wrong in our data - we cannot measure TORQUE > 170! Let's DELETE all this data from our gold table as we don't want to have wrong value in our dataset
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC DELETE FROM quentin.turbine_gold where timestamp < '2020-00-01T00:00:00.000+0000'
+# MAGIC DELETE FROM stuart.turbine_gold where TORQUE > 170
 
 # COMMAND ----------
 
@@ -182,7 +220,7 @@ turbine_status = spark.read.format("delta").load("/Users/stuart.lynn@databricks.
 
 from pyspark.sql.functions import rand
 
-dataset = spark.read.table("quentin.turbine_gold")
+dataset = spark.read.table("stuart.turbine_gold")
 dataset = dataset.orderBy(rand()).cache()
 turbine_healthy = dataset.filter("STATUS = 'healthy'")
 turbine_damaged = dataset.filter("STATUS = 'damaged'")
@@ -191,9 +229,9 @@ turbine_damaged = dataset.filter("STATUS = 'damaged'")
 
 # MAGIC %md 
 # MAGIC ## Data Exploration
-# MAGIC What do the distributions of sensor readings look like for ourturbines? 
+# MAGIC What do the distributions of sensor readings look like for our turbines? 
 # MAGIC 
-# MAGIC *Notice the much larger stdev in AN8, AN9 and AN10 for Damaged turbined.*
+# MAGIC *Notice the much larger stdev in AN8, AN9 and AN10 for Damaged turbines.*
 
 # COMMAND ----------
 
@@ -208,10 +246,6 @@ display(turbine_damaged.describe())
 # COMMAND ----------
 
 # Compare AN9 value for healthy/damaged; varies much more for damaged ones
-display(dataset)
-
-# COMMAND ----------
-
 display(dataset)
 
 # COMMAND ----------
@@ -239,8 +273,6 @@ import mlflow.spark
 import mlflow
 
 with mlflow.start_run():
-    # the source table will automatically be logged to mlflow
-    mlflow.spark.autolog()
 
     gbt = GBTClassifier(labelCol="label", featuresCol="features").setMaxIter(5)
     grid = ParamGridBuilder().addGrid(gbt.maxDepth, [4, 5, 6]).build()
@@ -252,7 +284,8 @@ with mlflow.start_run():
 
     featureCols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10"]
     stages = [VectorAssembler(inputCols=featureCols, outputCol="va"),
-              StandardScaler(inputCol="va", outputCol="features"), StringIndexer(inputCol="STATUS", outputCol="label"),
+              StandardScaler(inputCol="va", outputCol="features"), 
+              StringIndexer(inputCol="STATUS", outputCol="label"),
               cv]
     pipeline = Pipeline(stages=stages)
 
@@ -269,6 +302,10 @@ with mlflow.start_run():
 
 # MAGIC %md
 # MAGIC ## Evaluate Model
+
+# COMMAND ----------
+
+predictions.createOrReplaceTempView("predictions")
 
 # COMMAND ----------
 
@@ -297,7 +334,7 @@ best_models = mlflow.search_runs(
     by=['metrics.AUROC'], ascending=False)
 model_uri = best_models.iloc[0].artifact_uri
 
-model = mlflow.register_model(best_models.iloc[0].artifact_uri + "/turbine_gbt", "turbine_gbt")
+model = mlflow.register_model(best_models.iloc[0].artifact_uri + "/turbine_gbt", "turbine_gbt_sl")
 print("Model  " + str(model.version) + " has been registered!")
 sleep(5)
 
@@ -307,13 +344,12 @@ sleep(5)
 client = mlflow.tracking.MlflowClient()
 ########
 # NOTE: this won't be necessary in the next client release (use archive_existing_versions instead)
-for old_model_in_production in client.get_latest_versions(name="turbine_gbt", stages=["Production"]):
-    if old_model_in_production.version != model.version:
-        client.update_model_version(name="turbine_gbt", version=old_model_in_production.version, stage="Archived")
+# for old_model_in_production in client.get_latest_versions(name="turbine_gbt_sl", stages=["Production"]):
+#     if old_model_in_production.version != model.version:
+#         client.update_model_version(name="turbine_gbt_sl", version=old_model_in_production.version, stage="Archived")
 #########
 
-client.update_model_version(name="turbine_gbt", version=model.version,
-                            stage="Production")  # NOTE: add here archive_existing_versions=true with new client version
+client.transition_model_version_stage(name="turbine_gbt_sl", version=model.version, stage="Production")  # NOTE: add here archive_existing_versions=true with new client version
 
 # COMMAND ----------
 
@@ -323,10 +359,10 @@ client.update_model_version(name="turbine_gbt", version=model.version,
 # COMMAND ----------
 
 # DBTITLE 1,Load the model from our registry
-model_from_registry = mlflow.pyfunc.load_model('models:/turbine_gbt/production')
+model_from_registry = mlflow.spark.load_model('models:/turbine_gbt_sl/production')
 
 # COMMAND ----------
 
 # DBTITLE 1,Compute predictions using our spark model:
-prediction = model_from_registry.spark_model.transform(dataset)
+prediction = model_from_registry.transform(dataset)
 prediction.select(*featureCols + ['prediction']).display()
