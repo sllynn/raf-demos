@@ -2,7 +2,6 @@
 import os
 import random
 from time import sleep
-from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from pyspark.sql.functions import *
 
@@ -12,9 +11,17 @@ data_uri = dbutils.widgets.get("data_uri")
 
 # COMMAND ----------
 
+spark.read.csv("/mnt/databricks-datasets-private/ML/wind_turbine/D1.csv.gz").display()
+
+# COMMAND ----------
+
+spark.read.csv("/mnt/databricks-datasets-private/ML/wind_turbine/H1.csv.gz").display()
+
+# COMMAND ----------
+
 random_udf = udf(lambda: int(random.random() * 100000), IntegerType()).asNondeterministic()
 
-feature_cols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10", "SPEED", "TORQUE"]
+feature_cols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10"]
 csv_schema = StructType([StructField(fcol, DoubleType()) for fcol in feature_cols])
 
 raw_csv_sdf = (
@@ -30,6 +37,10 @@ raw_csv_sdf = (
 
 # COMMAND ----------
 
+raw_csv_sdf.display()
+
+# COMMAND ----------
+
 (
   raw_csv_sdf
   .select("ID", "STATUS")
@@ -41,14 +52,24 @@ raw_csv_sdf = (
 
 # COMMAND ----------
 
+dbutils.fs.rm(os.path.join(data_uri, "raw"), True)
+
+# COMMAND ----------
+
 (
   raw_csv_sdf
   .select("key", "value")
   .repartition(5000) # small files!
   .write
   .mode("overwrite")
-  .save(os.path.join(data_uri, "raw"))
+  .csv(os.path.join(data_uri, "raw"))
 )
+
+# COMMAND ----------
+
+dbutils.fs.rm(os.path.join(data_uri, "bronze"), True)
+dbutils.fs.rm(os.path.join(data_uri, "silver"), True)
+dbutils.fs.rm(os.path.join(data_uri, "gold"), True)
 
 # COMMAND ----------
 

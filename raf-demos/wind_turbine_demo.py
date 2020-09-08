@@ -26,50 +26,14 @@
 
 # COMMAND ----------
 
-import random
+import os
 from time import sleep
-from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from pyspark.sql.functions import *
 
 # COMMAND ----------
 
-random_udf = udf(lambda: int(random.random() * 100000), IntegerType()).asNondeterministic()
-
-feature_cols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10", "SPEED", "TORQUE"]
-csv_schema = StructType([StructField(fcol, DoubleType()) for fcol in feature_cols])
-
-raw_csv_sdf = (
-  spark.read
-  .csv("/mnt/databricks-datasets-private/ML/wind_turbine", schema=csv_schema)
-  .withColumn("key", random_udf())
-  .withColumn("ID", monotonically_increasing_id())
-  .withColumn("TIMESTAMP", current_timestamp())
-  .withColumn("value", to_json(struct(*feature_cols, "ID", "TIMESTAMP")))
-  .withColumn("STATUS", substring(reverse(split(input_file_name(), "/"))[0], 1, 1))
-  .withColumn("STATUS", when(col("STATUS") == "D", "damaged").otherwise("healthy"))
-)
-
-# COMMAND ----------
-
-(
-  raw_csv_sdf
-  .select("ID", "STATUS")
-  .write
-  .format("delta")
-  .save("/Users/stuart.lynn@databricks.com/demo/turbine/status")
-)
-
-# COMMAND ----------
-
-(
-  raw_csv_sdf
-  .select("key", "value")
-  .repartition(5000) # small files!
-  .write
-  .mode("overwrite")
-  .csv("/Users/stuart.lynn@databricks.com/demo/turbine/raw/")
-)
+data_uri = dbutils.widgets.get("data_uri")
 
 # COMMAND ----------
 
@@ -85,7 +49,7 @@ bronzeDF = (
 #         .option("subscribe", "turbine")
         .option("maxFilesPerTrigger", 1)
         .schema("key string, value string")
-        .csv("/Users/stuart.lynn@databricks.com/demo/turbine/raw/")
+        .csv(os.path.join(data_uri, "raw"))
 )
 
 bronzeDF.display()
@@ -97,8 +61,8 @@ bronzeDF.display()
     bronzeDF
         .writeStream
         .format("delta")
-        .option("checkpointLocation", "/Users/stuart.lynn@databricks.com/demo/turbine/bronze/_checkpoint")
-        .option("path", "/Users/stuart.lynn@databricks.com/demo/turbine/bronze/data")
+        .option("checkpointLocation", os.path.join(data_uri, "bronze", "_checkpoint"))
+        .option("path", os.path.join(data_uri, "bronze", "data"))
         .start()
 )
 
@@ -106,9 +70,11 @@ bronzeDF.display()
 
 # MAGIC %sql
 # MAGIC -- Add the table in our data catalog
+# MAGIC drop table if exists stuart.turbine_bronze;
+# MAGIC 
 # MAGIC create table if not exists stuart.turbine_bronze
 # MAGIC   using delta
-# MAGIC   location '/Users/stuart.lynn@databricks.com/demo/turbine/bronze/data';
+# MAGIC   location '$data_uri/bronze/data';
 # MAGIC 
 # MAGIC -- Turn on autocompaction to solve small files issues on your streaming job, that's all you have to do!
 # MAGIC alter table stuart.turbine_bronze set tblproperties ('delta.autoOptimize.autoCompact' = true, 'delta.autoOptimize.optimizeWrite' = true);
@@ -130,7 +96,7 @@ bronzeDF.display()
 # COMMAND ----------
 
 jsonSchema = StructType([StructField(col, DoubleType(), False) for col in
-                         ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10", "SPEED", "TORQUE", "ID"]] + [
+                         ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10", "ID"]] + [
                             StructField("TIMESTAMP", TimestampType())])
 
 silverStream = spark.readStream.table('stuart.turbine_bronze')
@@ -141,18 +107,21 @@ silverStream = spark.readStream.table('stuart.turbine_bronze')
         .writeStream
         .format("delta")
         .trigger(once=True)
-        .option("checkpointLocation", "/Users/stuart.lynn@databricks.com/demo/turbine/silver/_checkpoint")
-        .option("path", "/Users/stuart.lynn@databricks.com/demo/turbine/silver/data")
+        .option("checkpointLocation", os.path.join(data_uri, "silver", "_checkpoint"))
+        .option("path", os.path.join(data_uri, "silver", "data"))
         .start()
 )
 
 # COMMAND ----------
 
 # MAGIC %sql
+# MAGIC 
+# MAGIC drop table if exists stuart.turbine_silver;
+# MAGIC 
 # MAGIC -- Add the table in our data catalog
 # MAGIC create table if not exists stuart.turbine_silver
 # MAGIC   using delta
-# MAGIC   location '/Users/stuart.lynn@databricks.com/demo/turbine/silver/data';
+# MAGIC   location '$data_uri/silver/data';
 # MAGIC 
 # MAGIC -- Select data
 # MAGIC select * from stuart.turbine_silver;
@@ -162,7 +131,7 @@ silverStream = spark.readStream.table('stuart.turbine_bronze')
 (
     spark.read
         .format("delta")
-        .load("/Users/stuart.lynn@databricks.com/demo/turbine/status")
+        .load(os.path.join(data_uri, "status"))
         .display()
 )
 
@@ -174,7 +143,7 @@ silverStream = spark.readStream.table('stuart.turbine_bronze')
 # COMMAND ----------
 
 turbine_stream = spark.readStream.table('stuart.turbine_silver')
-turbine_status = spark.read.format("delta").load("/Users/stuart.lynn@databricks.com/demo/turbine/status")
+turbine_status = spark.read.format("delta").load(os.path.join(data_uri, "status"))
 
 (
     turbine_stream
@@ -182,18 +151,21 @@ turbine_status = spark.read.format("delta").load("/Users/stuart.lynn@databricks.
         .writeStream
         .format("delta")
         .trigger(once=True)
-        .option("checkpointLocation", "/Users/stuart.lynn@databricks.com/demo/turbine/gold/_checkpoint")
-        .option("path", "/Users/stuart.lynn@databricks.com/demo/turbine/gold/data")
+        .option("checkpointLocation", os.path.join(data_uri, "gold", "_checkpoint"))
+        .option("path", os.path.join(data_uri, "gold", "data"))
         .start()
 )
 
 # COMMAND ----------
 
 # MAGIC %sql
+# MAGIC 
+# MAGIC drop table if exists stuart.turbine_gold;
+# MAGIC 
 # MAGIC -- Add the table in our data catalog
 # MAGIC create table if not exists stuart.turbine_gold
 # MAGIC   using delta
-# MAGIC   location '/Users/stuart.lynn@databricks.com/demo/turbine/gold/data';
+# MAGIC   location '$data_uri/gold/data';
 # MAGIC 
 # MAGIC -- Select data
 # MAGIC select * from stuart.turbine_gold;
@@ -202,12 +174,12 @@ turbine_status = spark.read.format("delta").load("/Users/stuart.lynn@databricks.
 
 # MAGIC %md 
 # MAGIC ## Run DELETE/UPDATE/MERGE with DELTA ! 
-# MAGIC We just realized that something is wrong in our data - we cannot measure TORQUE > 170! Let's DELETE all this data from our gold table as we don't want to have wrong value in our dataset
+# MAGIC We just realized that something is wrong with observations prior to 2020! Let's DELETE all this data from our gold table as we don't want to have wrong value in our dataset
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC DELETE FROM stuart.turbine_gold where TORQUE > 170
+# MAGIC DELETE FROM stuart.turbine_gold where year(TIMESTAMP) < 2020
 
 # COMMAND ----------
 
@@ -246,7 +218,7 @@ display(turbine_damaged.describe())
 # COMMAND ----------
 
 # Compare AN9 value for healthy/damaged; varies much more for damaged ones
-display(dataset)
+dataset.display()
 
 # COMMAND ----------
 
@@ -366,3 +338,11 @@ model_from_registry = mlflow.spark.load_model('models:/turbine_gbt_sl/production
 # DBTITLE 1,Compute predictions using our spark model:
 prediction = model_from_registry.transform(dataset)
 prediction.select(*featureCols + ['prediction']).display()
+
+# COMMAND ----------
+
+dbutils.notebook.exit("0")
+
+# COMMAND ----------
+
+dbutils.widgets.text("data_uri", "/Users/stuart.lynn@databricks.com/demo/turbine")
