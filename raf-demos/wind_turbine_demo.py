@@ -26,25 +26,43 @@
 
 # COMMAND ----------
 
+from time import sleep
+from pyspark.sql import SparkSession
+from pyspark.sql.types import *
+from pyspark.sql.functions import *
+
+spark = (
+    SparkSession
+        .builder
+        .getOrCreate()
+)
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## 1/ Bronze layer: ingest data from Kafka
 
 # COMMAND ----------
 
-#Load stream from Kafka
-bronzeDF = spark.readStream \
-                .format("kafka") \
-                .option("kafka.bootstrap.servers", "kafkaserver1:9092,kafkaserver2:9092") \
-                .option("subscribe", "turbine") \
-                .load()
+# Load stream from Kafka
+bronzeDF = (
+    spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", "kafkaserver1:9092,kafkaserver2:9092")
+        .option("subscribe", "turbine")
+        .load()
+)
 
-#Write the output to a delta table
-bronzeDF.selectExpr("CAST(key AS STRING) as key", "CAST(value AS STRING) as value") \
+# Write the output to a delta table
+(
+    bronzeDF
+        .selectExpr("CAST(key AS STRING) as key", "CAST(value AS STRING) as value")
         .writeStream
         .format("delta")
-        .option("checkpointLocation", "/Users/quentin.ambard@databricks.com/demo/turbine/bronze/_checkpoint")
-        .option("path", "/Users/quentin.ambard@databricks.com/demo/turbine/bronze/data")
+        .option("checkpointLocation", "/Users/stuart.lynn@databricks.com/demo/turbine/bronze/_checkpoint")
+        .option("path", "/Users/stuart.lynn@databricks.com/demo/turbine/bronze/data")
         .start()
+)
 
 # COMMAND ----------
 
@@ -58,7 +76,7 @@ bronzeDF.selectExpr("CAST(key AS STRING) as key", "CAST(value AS STRING) as valu
 # MAGIC -- Add the table in our data catalog
 # MAGIC create table if not exists quentin.turbine_bronze
 # MAGIC   using delta
-# MAGIC   location '/Users/quentin.ambard@databricks.com/demo/turbine/bronze/data';
+# MAGIC   location '/Users/stuart.lynn@databricks.com/demo/turbine/bronze/data';
 # MAGIC 
 # MAGIC -- Turn on autocompaction to solve small files issues on your streaming job, that's all you have to do!
 # MAGIC alter table quentin.turbine_bronze set tblproperties ('delta.autoOptimize.autoCompact' = true, 'delta.autoOptimize.optimizeWrite' = true);
@@ -73,17 +91,22 @@ bronzeDF.selectExpr("CAST(key AS STRING) as key", "CAST(value AS STRING) as valu
 
 # COMMAND ----------
 
-jsonSchema = StructType([StructField(col, DoubleType(), False) for col in ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10", "SPEED", "TORQUE", "ID"]] + [StructField("TIMESTAMP", TimestampType())])
+jsonSchema = StructType([StructField(col, DoubleType(), False) for col in
+                         ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10", "SPEED", "TORQUE", "ID"]] + [
+                            StructField("TIMESTAMP", TimestampType())])
 
 silverStream = spark.readStream.table('quentin.turbine_bronze')
-silverStream.withColumn("jsonData", from_json(col("value"), jsonSchema)) \
-            .select("jsonData.*") \
-            .writeStream \
-            .format("delta") \
-            .trigger(once=True) \
-            .option("checkpointLocation", "/Users/quentin.ambard@databricks.com/demo/turbine/silver/_checkpoint") \
-            .option("path", "/Users/quentin.ambard@databricks.com/demo/turbine/silver/data") \
-            .start()
+(
+    silverStream
+        .withColumn("jsonData", from_json(col("value"), jsonSchema))
+        .select("jsonData.*")
+        .writeStream
+        .format("delta")
+        .trigger(once=True)
+        .option("checkpointLocation", "/Users/stuart.lynn@databricks.com/demo/turbine/silver/_checkpoint")
+        .option("path", "/Users/stuart.lynn@databricks.com/demo/turbine/silver/data")
+        .start()
+)
 
 # COMMAND ----------
 
@@ -91,14 +114,19 @@ silverStream.withColumn("jsonData", from_json(col("value"), jsonSchema)) \
 # MAGIC -- Add the table in our data catalog
 # MAGIC create table if not exists quentin.turbine_silver
 # MAGIC   using delta
-# MAGIC   location '/Users/quentin.ambard@databricks.com/demo/turbine/silver/data';
+# MAGIC   location '/Users/stuart.lynn@databricks.com/demo/turbine/silver/data';
 # MAGIC 
 # MAGIC -- Select data
 # MAGIC select * from quentin.turbine_silver;
 
 # COMMAND ----------
 
-display(spark.read.format("delta").load("/Users/quentin.ambard@databricks.com/demo/turbine/status"))
+(
+    spark.read
+        .format("delta")
+        .load("/Users/stuart.lynn@databricks.com/demo/turbine/status")
+        .display()
+)
 
 # COMMAND ----------
 
@@ -108,15 +136,18 @@ display(spark.read.format("delta").load("/Users/quentin.ambard@databricks.com/de
 # COMMAND ----------
 
 turbine_stream = spark.readStream.table('quentin.turbine_silver')
-turbine_status = spark.read.format("delta").load("/Users/quentin.ambard@databricks.com/demo/turbine/status")
+turbine_status = spark.read.format("delta").load("/Users/stuart.lynn@databricks.com/demo/turbine/status")
 
-turbine_stream.join(turbine_status, ['ID'], 'left') \
-              .writeStream \
-              .format("delta") \
-              .trigger(once=True) \
-              .option("checkpointLocation", "/Users/quentin.ambard@databricks.com/demo/turbine/gold/_checkpoint") \
-              .option("path", "/Users/quentin.ambard@databricks.com/demo/turbine/gold/data") \
-              .start()
+(
+    turbine_stream
+        .join(turbine_status, ['ID'], 'left')
+        .writeStream
+        .format("delta")
+        .trigger(once=True)
+        .option("checkpointLocation", "/Users/stuart.lynn@databricks.com/demo/turbine/gold/_checkpoint")
+        .option("path", "/Users/stuart.lynn@databricks.com/demo/turbine/gold/data")
+        .start()
+)
 
 # COMMAND ----------
 
@@ -124,7 +155,7 @@ turbine_stream.join(turbine_status, ['ID'], 'left') \
 # MAGIC -- Add the table in our data catalog
 # MAGIC create table if not exists quentin.turbine_gold
 # MAGIC   using delta
-# MAGIC   location '/Users/quentin.ambard@databricks.com/demo/turbine/gold/data';
+# MAGIC   location '/Users/stuart.lynn@databricks.com/demo/turbine/gold/data';
 # MAGIC 
 # MAGIC -- Select data
 # MAGIC select * from quentin.turbine_gold;
@@ -150,6 +181,7 @@ turbine_stream.join(turbine_status, ['ID'], 'left') \
 # COMMAND ----------
 
 from pyspark.sql.functions import rand
+
 dataset = spark.read.table("quentin.turbine_gold")
 dataset = dataset.orderBy(rand()).cache()
 turbine_healthy = dataset.filter("STATUS = 'healthy'")
@@ -165,12 +197,12 @@ turbine_damaged = dataset.filter("STATUS = 'damaged'")
 
 # COMMAND ----------
 
-#Healthy turbine
+# Healthy turbine
 display(turbine_healthy.describe())
 
 # COMMAND ----------
 
-#Damaged turbine
+# Damaged turbine
 display(turbine_damaged.describe())
 
 # COMMAND ----------
@@ -207,29 +239,31 @@ import mlflow.spark
 import mlflow
 
 with mlflow.start_run():
-  #the source table will automatically be logged to mlflow
-  mlflow.spark.autolog()
-  
-  gbt = GBTClassifier(labelCol="label", featuresCol="features").setMaxIter(5)
-  grid = ParamGridBuilder().addGrid(gbt.maxDepth, [4, 5, 6]).build()
+    # the source table will automatically be logged to mlflow
+    mlflow.spark.autolog()
 
-  ev = BinaryClassificationEvaluator()
- 
-  # 3-fold cross validation
-  cv = CrossValidator(estimator=gbt, estimatorParamMaps=grid, evaluator=ev, numFolds=3)
+    gbt = GBTClassifier(labelCol="label", featuresCol="features").setMaxIter(5)
+    grid = ParamGridBuilder().addGrid(gbt.maxDepth, [4, 5, 6]).build()
 
-  featureCols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10"]
-  stages = [VectorAssembler(inputCols=featureCols, outputCol="va"), StandardScaler(inputCol="va", outputCol="features"), StringIndexer(inputCol="STATUS", outputCol="label"), cv]
-  pipeline = Pipeline(stages=stages)
+    ev = BinaryClassificationEvaluator()
 
-  pipelineTrained = pipeline.fit(train)
-  
-  mlflow.spark.log_model(pipelineTrained, "turbine_gbt")
-  mlflow.set_tag("model", "turbine_gbt")
-  predictions = pipelineTrained.transform(test)
-  # Prints AUROC
-  AUROC = ev.evaluate(predictions)
-  mlflow.log_metric("AUROC", AUROC)
+    # 3-fold cross validation
+    cv = CrossValidator(estimator=gbt, estimatorParamMaps=grid, evaluator=ev, numFolds=3)
+
+    featureCols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10"]
+    stages = [VectorAssembler(inputCols=featureCols, outputCol="va"),
+              StandardScaler(inputCol="va", outputCol="features"), StringIndexer(inputCol="STATUS", outputCol="label"),
+              cv]
+    pipeline = Pipeline(stages=stages)
+
+    pipelineTrained = pipeline.fit(train)
+
+    mlflow.spark.log_model(pipelineTrained, "turbine_gbt")
+    mlflow.set_tag("model", "turbine_gbt")
+    predictions = pipelineTrained.transform(test)
+    # Prints AUROC
+    AUROC = ev.evaluate(predictions)
+    mlflow.log_metric("AUROC", AUROC)
 
 # COMMAND ----------
 
@@ -245,8 +279,9 @@ with mlflow.start_run():
 bestModel = pipelineTrained.stages[-1:][0].bestModel
 # convert numpy.float64 to str for spark.createDataFrame()
 weights = map(lambda w: '%.10f' % w, bestModel.featureImportances)
-weightedFeatures = spark.createDataFrame(sorted(zip(weights, featureCols), key=lambda x: x[1], reverse=True)).toDF("weight", "feature")
-display(weightedFeatures.select("feature", "weight").orderBy("weight", ascending=False))
+weightedFeatures = spark.createDataFrame(sorted(zip(weights, featureCols), key=lambda x: x[1], reverse=True)).toDF(
+    "weight", "feature")
+weightedFeatures.select("feature", "weight").orderBy("weight", ascending=False).display()
 
 # COMMAND ----------
 
@@ -255,13 +290,15 @@ display(weightedFeatures.select("feature", "weight").orderBy("weight", ascending
 # COMMAND ----------
 
 # DBTITLE 1,Save our new model to the registry as a new version
-from time import sleep
-#get the best model having the best metrics.AUROC from the registry
-best_models = mlflow.search_runs(filter_string='tags.model="turbine_gbt" and attributes.status = "FINISHED" and metrics.AUROC > 0').sort_values(by=['metrics.AUROC'], ascending=False)
+
+# get the best model having the best metrics.AUROC from the registry
+best_models = mlflow.search_runs(
+    filter_string='tags.model="turbine_gbt" and attributes.status = "FINISHED" and metrics.AUROC > 0').sort_values(
+    by=['metrics.AUROC'], ascending=False)
 model_uri = best_models.iloc[0].artifact_uri
 
-model = mlflow.register_model(best_models.iloc[0].artifact_uri+"/turbine_gbt", "turbine_gbt")
-print("Model  "+str(model.version)+" has been registered!")
+model = mlflow.register_model(best_models.iloc[0].artifact_uri + "/turbine_gbt", "turbine_gbt")
+print("Model  " + str(model.version) + " has been registered!")
 sleep(5)
 
 # COMMAND ----------
@@ -269,13 +306,14 @@ sleep(5)
 # DBTITLE 1,Flag this version as production ready
 client = mlflow.tracking.MlflowClient()
 ########
-#NOTE: this won't be necessary in the next client release (use archive_existing_versions instead)
-for old_model_in_production in client.get_latest_versions(name = "turbine_gbt", stages = ["Production"]):
-  if old_model_in_production.version != model.version:
-    client.update_model_version(name = "turbine_gbt", version = old_model_in_production.version, stage = "Archived")
+# NOTE: this won't be necessary in the next client release (use archive_existing_versions instead)
+for old_model_in_production in client.get_latest_versions(name="turbine_gbt", stages=["Production"]):
+    if old_model_in_production.version != model.version:
+        client.update_model_version(name="turbine_gbt", version=old_model_in_production.version, stage="Archived")
 #########
 
-client.update_model_version(name = "turbine_gbt", version = model.version, stage = "Production") #NOTE: add here archive_existing_versions=true with new client version
+client.update_model_version(name="turbine_gbt", version=model.version,
+                            stage="Production")  # NOTE: add here archive_existing_versions=true with new client version
 
 # COMMAND ----------
 
@@ -290,5 +328,5 @@ model_from_registry = mlflow.pyfunc.load_model('models:/turbine_gbt/production')
 # COMMAND ----------
 
 # DBTITLE 1,Compute predictions using our spark model:
-prediction = model_from_registry.spark_model.transform(data)
-display(prediction.select(*featureCols+['prediction']))
+prediction = model_from_registry.spark_model.transform(dataset)
+prediction.select(*featureCols + ['prediction']).display()
