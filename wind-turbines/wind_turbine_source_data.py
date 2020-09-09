@@ -11,6 +11,10 @@ data_uri = dbutils.widgets.get("data_uri")
 
 # COMMAND ----------
 
+dbutils.fs.rm(data_uri, True)
+
+# COMMAND ----------
+
 spark.read.csv("/mnt/databricks-datasets-private/ML/wind_turbine/D1.csv.gz").display()
 
 # COMMAND ----------
@@ -52,10 +56,6 @@ raw_csv_sdf.display()
 
 # COMMAND ----------
 
-dbutils.fs.rm(os.path.join(data_uri, "raw"), True)
-
-# COMMAND ----------
-
 (
   raw_csv_sdf
   .select("key", "value")
@@ -64,12 +64,6 @@ dbutils.fs.rm(os.path.join(data_uri, "raw"), True)
   .mode("overwrite")
   .csv(os.path.join(data_uri, "raw"))
 )
-
-# COMMAND ----------
-
-dbutils.fs.rm(os.path.join(data_uri, "bronze"), True)
-dbutils.fs.rm(os.path.join(data_uri, "silver"), True)
-dbutils.fs.rm(os.path.join(data_uri, "gold"), True)
 
 # COMMAND ----------
 
