@@ -26,10 +26,6 @@
 
 # COMMAND ----------
 
-# MAGIC %conda install shapely
-
-# COMMAND ----------
-
 import os
 from time import sleep
 from pyspark.sql.types import *
@@ -46,13 +42,17 @@ data_uri = dbutils.widgets.get("data_uri")
 
 # COMMAND ----------
 
+dbutils.fs.head(os.path.join(data_uri, "raw", "part-00000-tid-2920045476927871369-dae721ac-83b0-4554-8384-5403a66226ae-433551-1-c000.csv"))
+
+# COMMAND ----------
+
 bronzeDF = (
     spark.readStream
 #         .format("kafka")
 #         .option("kafka.bootstrap.servers", "kafkaserver1:9092,kafkaserver2:9092")
 #         .option("subscribe", "turbine")
         .option("maxFilesPerTrigger", 1)
-        .schema("key string, value string")
+        .schema("key long, value string")
         .csv(os.path.join(data_uri, "raw"))
 )
 
@@ -194,8 +194,6 @@ turbine_status = spark.read.format("delta").load(os.path.join(data_uri, "status"
 
 # COMMAND ----------
 
-from pyspark.sql.functions import rand
-
 dataset = spark.read.table("stuart.turbine_gold")
 dataset = dataset.orderBy(rand()).cache()
 turbine_healthy = dataset.filter("STATUS = 'healthy'")
@@ -238,6 +236,10 @@ from pyspark.ml import Pipeline
 train, test = dataset.limit(1000000).randomSplit([0.8, 0.2])
 print(train.count())
 print(test.count())
+
+# COMMAND ----------
+
+# MAGIC %conda install -c conda-forge mlflow=1.11.0
 
 # COMMAND ----------
 
@@ -303,11 +305,13 @@ weightedFeatures.select("feature", "weight").orderBy("weight", ascending=False).
 # COMMAND ----------
 
 # DBTITLE 1,Save our new model to the registry as a new version
-
 # get the best model having the best metrics.AUROC from the registry
-best_models = mlflow.search_runs(
-    filter_string='tags.model="turbine_gbt" and attributes.status = "FINISHED" and metrics.AUROC > 0').sort_values(
-    by=['metrics.AUROC'], ascending=False)
+best_models = (
+  mlflow
+  .search_runs(filter_string='tags.model="turbine_gbt" and attributes.status = "FINISHED" and metrics.AUROC > 0')
+  .sort_values(by=['metrics.AUROC'], ascending=False)
+)
+
 model_uri = best_models.iloc[0].artifact_uri
 
 model = mlflow.register_model(best_models.iloc[0].artifact_uri + "/turbine_gbt", "turbine_gbt_sl")
@@ -318,14 +322,8 @@ sleep(5)
 
 # DBTITLE 1,Flag this version as production ready
 client = mlflow.tracking.MlflowClient()
-########
-# NOTE: this won't be necessary in the next client release (use archive_existing_versions instead)
-# for old_model_in_production in client.get_latest_versions(name="turbine_gbt_sl", stages=["Production"]):
-#     if old_model_in_production.version != model.version:
-#         client.update_model_version(name="turbine_gbt_sl", version=old_model_in_production.version, stage="Archived")
-#########
 
-client.transition_model_version_stage(name="turbine_gbt_sl", version=model.version, stage="Production")  # NOTE: add here archive_existing_versions=true with new client version
+client.transition_model_version_stage(name="turbine_gbt_sl", version=model.version, stage="Production", archive_existing_versions=True)
 
 # COMMAND ----------
 
@@ -336,11 +334,21 @@ client.transition_model_version_stage(name="turbine_gbt_sl", version=model.versi
 
 # DBTITLE 1,Load the model from our registry
 model_from_registry = mlflow.spark.load_model('models:/turbine_gbt_sl/production')
+model_from_registry
 
 # COMMAND ----------
 
 # DBTITLE 1,Compute predictions using our spark model:
 prediction = model_from_registry.transform(dataset)
+featureCols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10"]
+prediction.select(*featureCols + ['prediction']).display()
+
+# COMMAND ----------
+
+# DBTITLE 1,Predictions on a streaming DF
+dataset_stream = spark.readStream.table("stuart.turbine_gold")
+prediction = model_from_registry.transform(dataset_stream)
+featureCols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10"]
 prediction.select(*featureCols + ['prediction']).display()
 
 # COMMAND ----------
