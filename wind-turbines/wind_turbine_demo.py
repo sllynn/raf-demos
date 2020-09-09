@@ -26,6 +26,10 @@
 
 # COMMAND ----------
 
+# MAGIC %conda install shapely
+
+# COMMAND ----------
+
 import os
 from time import sleep
 from pyspark.sql.types import *
