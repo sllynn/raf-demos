@@ -26,6 +26,10 @@
 
 # COMMAND ----------
 
+# MAGIC %conda install -c conda-forge mlflow=1.11.0
+
+# COMMAND ----------
+
 import os
 from time import sleep
 from pyspark.sql.types import *
@@ -42,7 +46,7 @@ data_uri = dbutils.widgets.get("data_uri")
 
 # COMMAND ----------
 
-dbutils.fs.head(os.path.join(data_uri, "raw", "part-00000-tid-2920045476927871369-dae721ac-83b0-4554-8384-5403a66226ae-433551-1-c000.csv"))
+dbutils.fs.head(os.path.join(data_uri, "raw", "part-00000-tid-2179953466220050251-616eb440-28be-424c-a9f5-b2cd9bc864bd-4831-1-c000.csv"))
 
 # COMMAND ----------
 
@@ -236,10 +240,6 @@ from pyspark.ml import Pipeline
 train, test = dataset.limit(1000000).randomSplit([0.8, 0.2])
 print(train.count())
 print(test.count())
-
-# COMMAND ----------
-
-# MAGIC %conda install -c conda-forge mlflow=1.11.0
 
 # COMMAND ----------
 
