@@ -358,3 +358,7 @@ dbutils.notebook.exit("0")
 # COMMAND ----------
 
 dbutils.widgets.text("data_uri", "/Users/stuart.lynn@databricks.com/demo/turbine")
+
+# COMMAND ----------
+
+print("some extra code")
